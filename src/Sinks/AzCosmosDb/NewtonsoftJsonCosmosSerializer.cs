@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#if NETSTANDARD2_0
 using System.IO;
 using System.Text;
 using Microsoft.Azure.Cosmos;
@@ -19,6 +20,7 @@ using Newtonsoft.Json;
 
 namespace Serilog.Sinks.AzCosmosDB
 {
+
     public class NewtonsoftJsonCosmosSerializer : CosmosSerializer
     {
         private static readonly Encoding DefaultEncoding = new UTF8Encoding(false, true);
@@ -65,3 +67,4 @@ namespace Serilog.Sinks.AzCosmosDB
         }
     }
 }
+#endif

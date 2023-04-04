@@ -20,6 +20,8 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
+using System.Text.Json.Serialization;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Azure.Cosmos;
@@ -30,6 +32,7 @@ using Newtonsoft.Json.Serialization;
 using Serilog.Core;
 using Serilog.Debugging;
 using Serilog.Events;
+using Serilog.Sinks.AzCosmosDB.Sinks.AzCosmosDb;
 using Serilog.Sinks.Extensions;
 using Serilog.Sinks.PeriodicBatching;
 
@@ -40,7 +43,6 @@ namespace Serilog.Sinks.AzCosmosDB
     {
         private const string BulkStoredProcedureId = "BulkImport";
         private const string BulkStoredProcedureVersionId = "BulkImportVersion";
-        private const string ExpectedProcedureVersion = "2.0.0";
         private readonly CosmosClient _client;
         private readonly IFormatProvider _formatProvider;
         private readonly bool _storeTimestampInUtc;
@@ -61,6 +63,7 @@ namespace Serilog.Sinks.AzCosmosDB
 
             _storeTimestampInUtc = options.StoreTimestampInUTC;
 
+#if NETSTANDARD2_0
             var serializerSettings = new JsonSerializerSettings
             {
                 ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
@@ -76,6 +79,28 @@ namespace Serilog.Sinks.AzCosmosDB
                 }
             };
             client.ClientOptions.Serializer = new NewtonsoftJsonCosmosSerializer(serializerSettings);
+#elif NETSTANDARD2_1 || NETCOREAPP3_0 ||NETCOREAPP3_1 || NET5_0 || NET6_0 || NET7_0
+            var serializerSettings = new JsonSerializerOptions
+            {
+                ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true
+            };
+
+            serializerSettings.Converters.Add(new JsonStringEnumConverter());
+
+            
+
+            var cosmosSerializer = new SystemTextJsonCosmosSerializer(serializerSettings);
+            cosmosSerializer.LogJsonError += (object sender, System.Text.Json.JsonException args, object state) =>
+            {
+                // Log the serialization error
+                SelfLog.WriteLine("Serialization Error: {0}" + args);
+            };
+
+
+            client.ClientOptions.Serializer = cosmosSerializer;
+#endif
             _client = client;
             CreateDatabaseAndContainerIfNotExistsAsync(options.DatabaseName, options.CollectionName, options.PartitionKey).Wait();
         }
@@ -90,26 +115,49 @@ namespace Serilog.Sinks.AzCosmosDB
                 _timeToLive = (int)options.TimeToLive.Value.TotalSeconds;
 
             _storeTimestampInUtc = options.StoreTimestampInUTC;
-
+#if NETSTANDARD2_0
             var serializerSettings = new JsonSerializerSettings
             {
                 ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                ContractResolver = new DefaultContractResolver(),                
+                ContractResolver = new DefaultContractResolver(),
             };
             serializerSettings.Error += (object sender, Newtonsoft.Json.Serialization.ErrorEventArgs args) =>
-             {
+            {
                 // only log an error once
                 if (args.CurrentObject == args.ErrorContext.OriginalObject)
                 {
                     SelfLog.WriteLine("Serialization Error: {0}" + args.ErrorContext.Error);
                     args.ErrorContext.Handled = true;
                 }
-             };
+            };
+            var builder = new CosmosClientBuilder(options.EndpointUri.ToString(), options.AuthorizationKey)
+                .WithCustomSerializer(new NewtonsoftJsonCosmosSerializer(serializerSettings))
+                .WithConnectionModeGateway();
+#elif NETSTANDARD2_1 || NETCOREAPP3_0 ||NETCOREAPP3_1 || NET5_0 || NET6_0 || NET7_0
+            var serializerSettings = new JsonSerializerOptions
+            {
+                ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true
+            };
+
+            serializerSettings.Converters.Add(new JsonStringEnumConverter());
+
+            
+
+            var cosmosSerializer = new SystemTextJsonCosmosSerializer(serializerSettings);
+            cosmosSerializer.LogJsonError += (object sender, System.Text.Json.JsonException args, object state) =>
+            {
+                // Log the serialization error
+                SelfLog.WriteLine("Serialization Error: {0}" + args);
+            };
+
 
             var builder = new CosmosClientBuilder(options.EndpointUri.ToString(), options.AuthorizationKey)
-              .WithCustomSerializer(new NewtonsoftJsonCosmosSerializer(serializerSettings))
+              .WithCustomSerializer(cosmosSerializer)
               .WithConnectionModeGateway();
 
+#endif
             if (options.DisableSSL)
                 builder.WithHttpClientFactory(() =>
                 {
@@ -202,16 +250,9 @@ namespace Serilog.Sinks.AzCosmosDB
                         versionValid = true;
                     }
                 }
-                else
-                {
-                    await _container.Scripts.CreateStoredProcedureAsync(new StoredProcedureProperties()
-                    {
-                        Id = BulkStoredProcedureVersionId,
-                        Body = (await GetScriptContents("bImportVersionCheck.js")).Replace("#ASSEMBLYVERSION#", expectedVersion.ToString()),
-                    });
-                }
 
                 var sprocExists = await CheckStoredProcedureExists(BulkStoredProcedureId);
+
                 if (sprocExists && !versionValid)
                 {
                     await _container.Scripts.DeleteStoredProcedureAsync(BulkStoredProcedureId);
@@ -221,6 +262,7 @@ namespace Serilog.Sinks.AzCosmosDB
 
                 if (!sprocExists)
                 {
+                    
                     await _container.Scripts.CreateStoredProcedureAsync(new StoredProcedureProperties()
                     {
                         Id = BulkStoredProcedureId,
@@ -229,14 +271,17 @@ namespace Serilog.Sinks.AzCosmosDB
                     await _container.Scripts.CreateStoredProcedureAsync(new StoredProcedureProperties()
                     {
                         Id = BulkStoredProcedureVersionId,
-                        Body = (await GetScriptContents("bImportVersionCheck.js")).Replace("#ASSEMBLYVERSION#", expectedVersion.ToString()),
+                        Body = (await GetScriptContents("bImportVersionCheck.js")).Replace("#ASSEMBLYVERSION#",
+                            expectedVersion.ToString()),
                     });
+
+
                 }
             }
             catch (Exception ex)
             {
 
-                SelfLog.WriteLine("Failed to update bulk stored procedure. {0}", ex);
+                SelfLog.WriteLine("Failed to update bulk stored procedure. IF you are running multiple instances, this may be normal. {0}", ex);
             }
         }
 
