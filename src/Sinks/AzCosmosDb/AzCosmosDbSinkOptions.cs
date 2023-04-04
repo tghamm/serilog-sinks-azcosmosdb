@@ -2,9 +2,9 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Serilog.Sinks.AzureCosmosDB
+namespace Serilog.Sinks.AzCosmosDB
 {
-    public class AzureCosmosDbSinkOptions
+    public class AzCosmosDbSinkOptions
     {
         private int _queueSizeLimit;
         ///<summary>
@@ -15,6 +15,12 @@ namespace Serilog.Sinks.AzureCosmosDB
         /// The time to wait between checking for event batches. Defaults to 2 seconds.
         /// </summary>
         public TimeSpan Period { get; set; }
+
+        /// <summary>
+        /// Disables SSL for use with locally hosted CosmosDB instances. This should not be used in production!
+        /// </summary>
+        public bool DisableSSL { get; set; }
+
 
         /// <summary>
         /// The maximum number of events that will be held in-memory while waiting to ship them to
@@ -41,7 +47,7 @@ namespace Serilog.Sinks.AzureCosmosDB
         public bool StoreTimestampInUTC { get; set; }
         public TimeSpan? TimeToLive { get; set; }
 
-        public AzureCosmosDbSinkOptions()
+        public AzCosmosDbSinkOptions()
         {
             this.Period = TimeSpan.FromSeconds(2);
             this.BatchPostingLimit = 100;
